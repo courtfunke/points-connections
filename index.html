@@ -1,0 +1,174 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,user-scalable=no">
+<title>Connections</title>
+<script src="https://cdn.jsdelivr.net/npm/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;user-select:none}
+body{margin:0;font-family:-apple-system,Helvetica,Arial,sans-serif;background:#f4f1ea;color:#222;text-align:center}
+#app{max-width:820px;margin:0 auto;padding:16px}
+h1{font-size:34px;margin:12px 0}h2{margin:8px 0}
+button{font:inherit;font-size:20px;padding:14px 24px;margin:6px;border:2px solid #222;border-radius:12px;background:#fff;color:#222;cursor:pointer}
+button.pri{background:#222;color:#fff}button:disabled{opacity:.35}
+input{font:inherit;font-size:28px;padding:12px;width:200px;text-align:center;border:2px solid #222;border-radius:12px;user-select:text}
+.letters button{width:90px;height:90px;font-size:36px}
+.letters button.sel{background:#222;color:#fff}
+.big{font-size:64px;font-weight:bold;letter-spacing:6px}
+.box{display:inline-block;width:90px;height:90px;line-height:90px;margin:6px;border:3px solid #bbb;border-radius:14px;font-size:38px;color:#bbb}
+.box.on{border-color:#2a9d3f;color:#2a9d3f;background:#e5f6e8}
+.top{display:flex;justify-content:space-between;align-items:center;font-size:20px;font-weight:bold;margin-bottom:10px}
+.solved{border-radius:10px;padding:12px;margin-bottom:8px;font-weight:bold}
+.solved small{display:block;font-weight:normal;margin-top:2px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.tile{min-height:84px;padding:6px;margin:0;border:0;border-radius:10px;background:#e3dfd3;font-size:clamp(15px,3vw,24px);font-weight:bold;display:flex;align-items:center;justify-content:center}
+.tile.sel{background:#5a594e;color:#fff}
+.pips{display:grid;grid-template-columns:repeat(var(--c),14px);gap:5px}
+.pips i{width:14px;height:14px;border-radius:50%;background:currentColor;display:block}
+.msg{min-height:28px;margin:10px 0;font-size:20px;font-weight:bold}
+.dot{display:inline-block;width:16px;height:16px;border-radius:50%;background:#222;margin-left:5px}
+.dot.x{background:#ccc}
+table{margin:12px auto;border-collapse:collapse;font-size:24px}td,th{padding:8px 22px;border-bottom:1px solid #ccc}
+.podium div{font-size:34px;margin:14px;font-weight:bold}
+</style></head><body><div id="app"></div>
+<script>
+/* ===== PUZZLES (edit here). "#N" = N dice pips. Each group = one correct set of 4. ===== */
+const ROUNDS=[
+ [{n:'Digits',w:['1','2','4','8']},{n:'Spelled out',w:['one','two','four','eight']},{n:'Sound-alikes',w:['won','too','for','ate']},{n:'Dice pips',w:['#1','#2','#4','#8']}],
+ [{n:'Group 1',w:['Funke','Soto','Pacinowski','Kagan']},{n:'Group 2',w:['Myers','Michels','Furnish','Feldstein']},{n:'Group 3',w:['Seegert','Portugal','Solvsberg','Drews']},{n:'Group 4',w:['Teplinski','Josefewicz','Kim','Somers']}],
+ [{n:'Rubble',w:['Rubble','on','the','double']},{n:'Rocky',w:['Rocky','Green','Means','Go']},{n:'Zuma',w:['Zuma','Let\u2019s','Dive','In']},{n:'Marshall',w:['Marshall','I\u2019m','Fired','Up']}]
+];
+const COLORS=['#f9df6d','#a0c35a','#b0c4ef','#ba81c5'],ROUND_SECS=180,PTS=[0,4,3,2];
+const $=id=>document.getElementById(id);
+const screen=h=>{$('app').innerHTML=h};
+const shuffle=a=>{for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]]}return a};
+const fmt=s=>Math.floor(s/60)+':'+String(s%60).padStart(2,'0');
+const lbl=w=>w[0]=='#'?w.slice(1)+(w=='#1'?' pip':' pips'):w;
+const tileHTML=w=>{if(w[0]!='#')return w;const n=+w.slice(1);return `<span class="pips" style="--c:${n==1?1:n==2?2:n==4?2:4}">${'<i></i>'.repeat(n)}</span>`};
+home();
+function home(){screen(`<h1>Connections</h1><p>Who are you?</p>
+<button class="pri" onclick="joinScreen()">Join as a table</button><br><button onclick="hostStart()">I'm the controller</button>`)}
+
+/* ================= PLAYER ================= */
+let conn,pp,G;
+function joinScreen(err){screen(`<h1>Join game</h1><p>Enter the 4-digit game code</p>
+<input id="code" inputmode="numeric" maxlength="4" value="${new URLSearchParams(location.search).get('c')||''}"><br>
+<button class="pri" onclick="go()">Next</button><p class="msg">${err||''}</p>`)}
+function go(){
+ const c=$('code').value.trim();if(c.length!=4)return;
+ screen('<h2>Connecting…</h2>');
+ pp=new Peer();
+ const to=setTimeout(()=>joinScreen('Could not connect. Check the code and Wi-Fi.'),12000);
+ pp.on('error',()=>{clearTimeout(to);joinScreen('Could not find that game. Check the code.')});
+ pp.on('open',()=>{conn=pp.connect('wordgrid-'+c,{reliable:true});
+  conn.on('data',pmsg);
+  conn.on('open',()=>clearTimeout(to));
+  conn.on('close',()=>screen('<h2>Disconnected</h2><button class="pri" onclick="location.reload()">Reconnect</button>'));});
+}
+let chosen='';
+function letterScreen(taken,err){screen(`<h1>Choose your table</h1><div class="letters">${'ABCDEF'.split('').map(l=>`<button id="L${l}" ${taken.includes(l)?'disabled':''} onclick="chosen='${l}';document.querySelectorAll('.letters button').forEach(b=>b.classList.remove('sel'));this.classList.add('sel')">${l}</button>`).join('')}</div>
+<button class="pri" onclick="if(chosen)conn.send({t:'join',table:chosen})">Join</button><p class="msg">${err||''}</p>`)}
+function pmsg(m){
+ if(m.t=='letters')letterScreen(m.taken);
+ else if(m.t=='err')conn.send({t:'again'});
+ else if(m.t=='joined')screen(`<h1>Table ${chosen}</h1><h2>You're in! Waiting for the game to start…</h2>`);
+ else if(m.t=='start')startRound(m);
+ else if(m.t=='end'){if(G){clearInterval(G.timer);G=null}
+  screen(`<h1>Round ${m.round+1} complete</h1><h2>${m.rank?'Your table finished #'+m.rank+'!':'Your table did not finish.'}</h2>
+  <div class="big">+${m.pts}</div><h2>Total: ${m.total} points</h2><p>Waiting for the next round…</p>`)}
+ else if(m.t=='final'){if(G){clearInterval(G.timer);G=null}
+  screen(`<h1>Game over!</h1>${podium(m.top)}<p>Thanks for playing!</p>`)}
+}
+const podium=top=>`<div class="podium">${top.map((x,i)=>`<div>${['🥇','🥈','🥉'][i]} Table ${x.table} — ${x.total} pts</div>`).join('')}</div>`;
+
+function startRound(m){
+ const tiles=[];ROUNDS[m.round].forEach((g,gi)=>g.w.forEach((w,k)=>tiles.push({w,g:gi,id:gi*4+k})));
+ G={round:m.round,tiles:shuffle(tiles),sel:[],solved:[],tried:new Set(),lives:4,end:Date.now()+m.secs*1000,over:false,msg:'',note:''};
+ drawGame();G.timer=setInterval(tick,250);
+}
+function tick(){if(!G)return;const left=Math.max(0,Math.ceil((G.end-Date.now())/1000));
+ const e=$('clock');if(e)e.textContent=fmt(left);
+ if(left<=0&&!G.over){G.over=true;G.msg="Time's up! Waiting for results…";clearInterval(G.timer);drawGame()}}
+function drawGame(){
+ const g=ROUNDS[G.round];
+ screen(`<div class="top"><span>Round ${G.round+1}</span><span id="clock">${fmt(Math.max(0,Math.ceil((G.end-Date.now())/1000)))}</span>
+ <span>Mistakes left:${[0,1,2,3].map(i=>`<span class="dot ${i<G.lives?'':'x'}"></span>`).join('')}</span></div>
+ ${G.solved.map(gi=>`<div class="solved" style="background:${COLORS[gi]}">${g[gi].n.toUpperCase()}<small>${g[gi].w.map(lbl).join(', ')}</small></div>`).join('')}
+ <div class="grid">${G.tiles.map((t,i)=>`<button class="tile ${G.sel.includes(t)?'sel':''}" onclick="pick(${i})">${tileHTML(t.w)}</button>`).join('')}</div>
+ <div class="msg">${G.msg}</div>
+ ${G.over?'':`<button class="pri" onclick="submit()" ${G.sel.length==4?'':'disabled'}>Submit</button><button onclick="G.sel=[];drawGame()">Deselect</button><button onclick="shuffle(G.tiles);drawGame()">Shuffle</button>`}`);
+}
+function pick(i){if(G.over)return;const t=G.tiles[i],k=G.sel.indexOf(t);
+ if(k>=0)G.sel.splice(k,1);else if(G.sel.length<4)G.sel.push(t);G.msg='';drawGame()}
+function submit(){
+ if(G.over||G.sel.length!=4)return;
+ const key=G.sel.map(t=>t.id).sort((a,b)=>a-b).join();
+ if(G.tried.has(key)){G.msg='You already tried that group!';drawGame();return}
+ G.tried.add(key);
+ const cnt=[0,0,0,0];G.sel.forEach(t=>cnt[t.g]++);const max=Math.max(...cnt);
+ if(max==4){const gi=G.sel[0].g;G.solved.push(gi);G.tiles=G.tiles.filter(t=>t.g!=gi);G.sel=[];G.msg='Correct!';
+  if(G.solved.length==4)return finish(true);}
+ else{G.lives--;G.sel=[];G.msg=max==3?'3 of those 4 are correct — so close!':'Not a group.';
+  if(G.lives==0)return finish(false);}
+ drawGame();
+}
+function finish(ok){G.over=true;clearInterval(G.timer);conn.send({t:'done',ok});
+ G.msg=ok?'🎉 Your table finished! Waiting for the round to end…':'Out of mistakes. Waiting for the round to end…';drawGame()}
+
+/* ================= CONTROLLER ================= */
+let T={},rd=-1,st='lobby',fin=[],tmr,endAt,hp,code;
+function hostStart(){
+ try{navigator.wakeLock.request('screen')}catch(e){}
+ code=String(Math.floor(1000+Math.random()*9000));
+ hp=new Peer('wordgrid-'+code);
+ hp.on('error',e=>{if(e.type=='unavailable-id')hostStart();else screen('<h2>Connection error: '+e.type+'</h2><button onclick="location.reload()">Retry</button>')});
+ hp.on('open',hdraw);
+ hp.on('connection',c=>{
+  c.on('open',()=>c.send({t:'letters',taken:Object.keys(T).filter(l=>T[l].conn&&T[l].conn.open)}));
+  c.on('data',m=>hmsg(c,m));
+  c.on('close',()=>{if(st=='lobby'&&c.table&&T[c.table]&&T[c.table].conn===c){delete T[c.table]}hdraw()});
+ });
+}
+function hmsg(c,m){
+ if(m.t=='again')return c.send({t:'letters',taken:Object.keys(T).filter(l=>T[l].conn&&T[l].conn.open)});
+ if(m.t=='join'){const l=m.table;
+  if(T[l]&&T[l].conn&&T[l].conn.open&&T[l].conn!==c)return c.send({t:'err'});
+  if(st!='lobby'&&!T[l])return c.send({t:'err'});
+  T[l]=T[l]||{pts:[],total:0,s:'play',rank:null};T[l].conn=c;c.table=l;c.send({t:'joined'});hdraw();return}
+ if(m.t=='done'){const l=c.table,t=T[l];if(st!='round'||!t||t.s!='play')return;
+  if(m.ok){fin.push(l);t.s='done';t.rank=fin.length}else t.s='out';
+  hdraw();
+  if(fin.length>=3||Object.values(T).every(x=>x.s!='play'))endRound()}
+}
+const send=(t,m)=>t.conn&&t.conn.open&&t.conn.send(m);
+function startNext(){
+ st='round';rd++;fin=[];Object.values(T).forEach(t=>{t.s='play';t.rank=null});
+ endAt=Date.now()+ROUND_SECS*1000;
+ Object.values(T).forEach(t=>send(t,{t:'start',round:rd,secs:ROUND_SECS}));
+ tmr=setInterval(()=>{const e=$('hclock');const left=Math.max(0,Math.ceil((endAt-Date.now())/1000));if(e)e.textContent=fmt(left);if(left<=0)endRound()},500);
+ hdraw();
+}
+function endRound(){
+ if(st!='round')return;clearInterval(tmr);st='recap';
+ Object.values(T).forEach(t=>{const p=t.rank?PTS[t.rank]:1;t.pts.push(p);t.total+=p;send(t,{t:'end',round:rd,rank:t.rank,pts:p,total:t.total})});
+ hdraw();
+}
+const sorted=()=>Object.keys(T).map(l=>({table:l,total:T[l].total})).sort((a,b)=>b.total-a.total||a.table.localeCompare(b.table));
+function showFinal(){st='final';const top=sorted().slice(0,3);
+ Object.values(T).forEach(t=>send(t,{t:'final',top}));hdraw()}
+function hdraw(){
+ const n=Object.keys(T).length;
+ if(st=='lobby'){
+  const url=location.origin+location.pathname+'?c='+code;
+  return screen(`<h1>Game code</h1><div class="big">${code}</div><p>Tables go to:<br><b style="user-select:text">${url}</b></p>
+  <div>${'ABCDEF'.split('').map(l=>`<span class="box ${T[l]?'on':''}">${l}</span>`).join('')}</div>
+  <h2>${n} table${n==1?'':'s'} signed in</h2>
+  <button class="pri" ${n?'':'disabled'} onclick="startNext()">Start Game</button>`)}
+ if(st=='round')return screen(`<div class="top"><span>Round ${rd+1}</span><span id="hclock">${fmt(Math.max(0,Math.ceil((endAt-Date.now())/1000)))}</span><span>${fin.length} finished</span></div>
+  <table>${Object.keys(T).sort().map(l=>`<tr><td>Table ${l}</td><td>${T[l].s=='done'?'✅ Finished #'+T[l].rank:T[l].s=='out'?'❌ Out of guesses':'Solving…'}</td></tr>`).join('')}</table>
+  <button onclick="endRound()">End round now</button>`);
+ if(st=='recap')return screen(`<h1>Round ${rd+1} results</h1>
+  <table><tr><th>Table</th><th>This round</th><th>Total</th></tr>${sorted().map(x=>`<tr><td>${x.table}</td><td>+${T[x.table].pts[rd]}</td><td>${x.total}</td></tr>`).join('')}</table>
+  ${rd<ROUNDS.length-1?`<button class="pri" onclick="startNext()">Start Round ${rd+2}</button>`:`<button class="pri" onclick="showFinal()">Show final results</button>`}`);
+ if(st=='final')return screen(`<h1>🏆 Game over! 🏆</h1>${podium(sorted().slice(0,3))}`);
+}
+</script></body></html>
